@@ -15,7 +15,7 @@ export function Header() {
   const pathname = usePathname()
   const router = useRouter()
   const [user, setUser] = useState<User | null>(null)
-  const { isAdmin, allowedPages } = usePermissions()
+  const { isAdmin, allowedPages, permissionsReady } = usePermissions()
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }: { data: { user: User | null } }) => setUser(data.user))
@@ -25,13 +25,19 @@ export function Header() {
     return () => subscription.unsubscribe()
   }, [])
 
+  const isAuthRoute =
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname === "/forgot-password" ||
+    pathname?.startsWith("/reset-password")
+
   async function handleLogout() {
     await supabase.auth.signOut()
     router.push("/login")
     router.refresh()
   }
 
-  const navItems = getNavItems(isAdmin, allowedPages)
+  const navItems = permissionsReady ? getNavItems(isAdmin, allowedPages) : []
   const homeHref = resolveHomePath(isAdmin, allowedPages)
 
   return (
@@ -49,7 +55,7 @@ export function Header() {
               SouthGenetics P&L
             </span>
           </Link>
-          {user && (
+          {user && !isAuthRoute && permissionsReady && (
             <nav className="flex items-center gap-1">
               {navItems.map((item) => {
                 const isActive = pathname === item.href || pathname?.startsWith(item.href + "/")
@@ -87,7 +93,7 @@ export function Header() {
                 Cerrar sesión
               </Button>
             </>
-          ) : (
+          ) : !isAuthRoute ? (
             <Link href="/login">
               <Button
                 variant="outline"
@@ -98,7 +104,7 @@ export function Header() {
                 Iniciar sesión
               </Button>
             </Link>
-          )}
+          ) : null}
         </div>
       </div>
     </header>

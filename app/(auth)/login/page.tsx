@@ -12,13 +12,18 @@ export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
+  const [checkingSession, setCheckingSession] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     supabase.auth.getSession().then(({ data }: { data: { session: unknown } }) => {
       if (cancelled) return
-      if (data.session) router.replace("/productos")
+      if (data.session) {
+        router.replace("/")
+        return
+      }
+      setCheckingSession(false)
     })
     return () => {
       cancelled = true
@@ -35,12 +40,21 @@ export default function LoginPage() {
         password,
       })
       if (error) throw error
-      router.replace("/productos")
+      router.replace("/")
+      router.refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo iniciar sesión")
     } finally {
       setLoading(false)
     }
+  }
+
+  if (checkingSession) {
+    return (
+      <div className="py-8 text-center text-sm text-white/70">
+        Verificando sesión…
+      </div>
+    )
   }
 
   return (
@@ -101,4 +115,3 @@ export default function LoginPage() {
     </div>
   )
 }
-
