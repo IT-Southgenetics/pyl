@@ -5,10 +5,12 @@ alwaysApply: true
 
 # Push automático a GitHub
 
-Solicitado por el usuario: **siempre** que completes cambios en el repo (implementación, fixes, refactors, ajustes pedidos), terminá el turno con commit y push:
+Solicitado por el usuario (jun 2026): **siempre** commitear y pushear al terminar cambios en el repo, **sin esperar** que lo pidan en cada turno.
+
+Cuando completes implementación, fixes, refactors o ajustes pedidos, terminá el turno con commit y push:
 
 1. `git status` — no incluyas nunca `.env`, `.env.local`, secretos ni archivos que solo sean locales/personales.
-2. `git add` solo lo que corresponda al cambio (evitá `git add` de credenciales).
+2. `git add` solo lo que corresponda al cambio (evitá `git add` de credenciales y exports locales).
 3. `git commit` con mensaje claro en inglés o español (título + cuerpo opcional).
 4. `git push` a la rama actual (habitualmente `main`).
 
