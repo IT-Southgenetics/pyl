@@ -1,29 +1,18 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import { usePermissions } from "@/lib/use-permissions"
 import { getNavItems, resolveHomePath } from "@/lib/page-access"
-import type { User, AuthChangeEvent, Session } from "@supabase/supabase-js"
 import { LogIn, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export function Header() {
   const pathname = usePathname()
   const router = useRouter()
-  const [user, setUser] = useState<User | null>(null)
-  const { isAdmin, allowedPages, permissionsReady } = usePermissions()
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }: { data: { user: User | null } }) => setUser(data.user))
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => setUser(session?.user ?? null))
-    return () => subscription.unsubscribe()
-  }, [])
+  const { userId, email, isAdmin, allowedPages, permissionsReady } = usePermissions()
 
   const isAuthRoute =
     pathname === "/login" ||
@@ -31,14 +20,17 @@ export function Header() {
     pathname === "/forgot-password" ||
     pathname?.startsWith("/reset-password")
 
+  const isLoggedIn = Boolean(userId)
+  const showNav = isLoggedIn && !isAuthRoute && permissionsReady
+
   async function handleLogout() {
     await supabase.auth.signOut()
     router.push("/login")
     router.refresh()
   }
 
-  const navItems = permissionsReady ? getNavItems(isAdmin, allowedPages) : []
-  const homeHref = resolveHomePath(isAdmin, allowedPages)
+  const navItems = showNav ? getNavItems(isAdmin, allowedPages) : []
+  const homeHref = permissionsReady ? resolveHomePath(isAdmin, allowedPages) : "/"
 
   return (
     <header
@@ -55,7 +47,7 @@ export function Header() {
               SouthGenetics P&L
             </span>
           </Link>
-          {user && !isAuthRoute && permissionsReady && (
+          {showNav ? (
             <nav className="flex items-center gap-1">
               {navItems.map((item) => {
                 const isActive = pathname === item.href || pathname?.startsWith(item.href + "/")
@@ -75,13 +67,15 @@ export function Header() {
                 )
               })}
             </nav>
-          )}
+          ) : isLoggedIn && !isAuthRoute && !permissionsReady ? (
+            <div className="h-9 w-48 rounded-lg bg-white/5 animate-pulse" aria-hidden />
+          ) : null}
         </div>
         <div className="flex items-center gap-3">
-          {user ? (
+          {isLoggedIn ? (
             <>
-              <span className="text-sm text-white/80 max-w-[180px] truncate" title={user.email ?? undefined}>
-                {user.email}
+              <span className="text-sm text-white/80 max-w-[180px] truncate" title={email ?? undefined}>
+                {email}
               </span>
               <Button
                 variant="ghost"
@@ -93,7 +87,7 @@ export function Header() {
                 Cerrar sesión
               </Button>
             </>
-          ) : !isAuthRoute ? (
+          ) : permissionsReady && !isAuthRoute ? (
             <Link href="/login">
               <Button
                 variant="outline"
@@ -110,4 +104,3 @@ export function Header() {
     </header>
   )
 }
-
