@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { fetchVentasAggregates, type VentasAggregateRow } from '@/lib/ventas-data';
 import Link from 'next/link';
@@ -155,14 +155,38 @@ const productNamesMatch = (name1: string, name2: string): boolean => {
   return false;
 };
 
+const hasBudgetAndRealSales = (row: ComparisonRow): boolean =>
+  row.budget2026 > 0 && row.real2026 > 0;
+
+function sortComparisonRows(
+  rows: ComparisonRow[],
+  sortBy: 'deltaBudgetVsReal2026' | 'deltaReal2026VsReal2025',
+  sortOrder: 'asc' | 'desc'
+): ComparisonRow[] {
+  return [...rows].sort((a, b) => {
+    const aPriority = hasBudgetAndRealSales(a) ? 0 : 1;
+    const bPriority = hasBudgetAndRealSales(b) ? 0 : 1;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+
+    const aVal = a[sortBy];
+    const bVal = b[sortBy];
+    return sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
+  });
+}
+
 export function ComparisonTable({ budgetName, months, countries, products }: ComparisonTableProps) {
-  const [data, setData] = useState<ComparisonRow[]>([]);
+  const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [aliasByName, setAliasByName] = useState<Record<string, string>>({});
   const [sortBy, setSortBy] = useState<'deltaBudgetVsReal2026' | 'deltaReal2026VsReal2025'>('deltaBudgetVsReal2026');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [openBudgetDropdownIdx, setOpenBudgetDropdownIdx] = useState<number | null>(null);
   const budgetDropdownRef = useRef<HTMLDivElement>(null);
+
+  const data = useMemo(
+    () => sortComparisonRows(rows, sortBy, sortOrder),
+    [rows, sortBy, sortOrder]
+  );
 
   const isAllMonths = months.length >= 12;
 
@@ -211,7 +235,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
       
       if (!budgetData || budgetData.length === 0) {
         console.warn('⚠️ No hay datos de budget para los filtros seleccionados');
-        setData([]);
+        setRows([]);
         setLoading(false);
         return;
       }
@@ -325,7 +349,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
       // Verificar que hay datos de budget
       if (!budgetData || budgetData.length === 0) {
         console.warn('⚠️ No hay datos de budget para mostrar');
-        setData([]);
+        setRows([]);
         setLoading(false);
         return;
       }
@@ -599,18 +623,11 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
         (row) => !(row.budget2026 === 0 && row.real2026 === 0 && row.real2025 === 0)
       );
 
-      // 8. Ordenar por delta seleccionado
-      const sorted = [...filteredData].sort((a, b) => {
-        const aVal = a[sortBy];
-        const bVal = b[sortBy];
-        return sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
-      });
+      setRows(filteredData);
 
-      setData(sorted);
-      
-      console.log('✅ Datos finales procesados:', sorted.length, 'registros');
-      if (sorted.length > 0) {
-        console.log('📊 Primeros 3 registros:', sorted.slice(0, 3));
+      console.log('✅ Datos finales procesados:', filteredData.length, 'registros');
+      if (filteredData.length > 0) {
+        console.log('📊 Primeros 3 registros:', sortComparisonRows(filteredData, sortBy, sortOrder).slice(0, 3));
       } else {
         console.warn('⚠️ No se generaron datos de comparación. Verificar logs anteriores.');
       }
