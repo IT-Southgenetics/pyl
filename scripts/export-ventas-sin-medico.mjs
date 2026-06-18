@@ -62,7 +62,9 @@ async function fetchProductOdooMap() {
   return map
 }
 
-async function fetchVentasSinMedico() {
+async function fetchVentasSinMedico(year = 2026) {
+  const fechaStart = `${year}-01-01`
+  const fechaEnd = `${year}-12-31`
   const pageSize = 1000
   let offset = 0
   const all = []
@@ -71,6 +73,8 @@ async function fetchVentasSinMedico() {
     const { data, error } = await supabase
       .from("ventas")
       .select(VENTAS_SELECT)
+      .gte("fecha", fechaStart)
+      .lte("fecha", fechaEnd)
       .or("medico.is.null,medico.eq.")
       .order("fecha", { ascending: false })
       .order("company", { ascending: true })
@@ -124,6 +128,7 @@ function buildResumen(rows) {
   }
 
   const resumen = [
+    { Metrica: "Año filtrado", Valor: 2026 },
     { Metrica: "Total ventas sin médico", Valor: rows.length },
     { Metrica: "Unidades totales", Valor: unidades },
     { Metrica: "Monto total", Valor: Math.round(monto * 100) / 100 },
@@ -148,9 +153,9 @@ async function main() {
   console.log("Cargando productos (id_odoo)...")
   const productMap = await fetchProductOdooMap()
 
-  console.log("Cargando ventas sin médico...")
-  const rows = await fetchVentasSinMedico()
-  console.log(`Total: ${rows.length} ventas`)
+  console.log("Cargando ventas sin médico (2026)...")
+  const rows = await fetchVentasSinMedico(2026)
+  console.log(`Total 2026: ${rows.length} ventas`)
 
   const sheetVentas = rows.map((r) => rowToSheet(r, productMap))
   const { resumen, porCompania, porAnio } = buildResumen(rows)
