@@ -7,13 +7,14 @@ import {
   buildProductCatalog,
   fetchVentasForComparison,
 } from '@/lib/comparison-sales';
+import { budgetCountryCodesForCompanies } from '@/lib/comparison-companies';
 import { TrendingUp, TrendingDown, Equal } from 'lucide-react';
 import { formatNumber } from '@/lib/utils';
 
 interface ComparisonSummaryProps {
   budgetName: string;
   months: string[];
-  countries: string[];
+  companies: string[];
   /** Array vacío = todos. */
   products: string[];
 }
@@ -33,7 +34,7 @@ const MONTH_KEYS = [
   'jul', 'aug', 'sep', 'oct', 'nov', 'dec'
 ];
 
-export function ComparisonSummary({ budgetName, months, countries, products }: ComparisonSummaryProps) {
+export function ComparisonSummary({ budgetName, months, companies, products }: ComparisonSummaryProps) {
   const [summary, setSummary] = useState<SummaryData>({
     budget2026: 0,
     real2026: 0,
@@ -47,7 +48,7 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
 
   useEffect(() => {
     fetchSummary();
-  }, [budgetName, months, countries, products]);
+  }, [budgetName, months, companies, products]);
 
   const fetchSummary = async () => {
     setLoading(true);
@@ -58,8 +59,11 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
         .eq('year', 2026)
         .eq('budget_name', budgetName);
 
-      if (countries.length > 0) {
-        budgetQuery = budgetQuery.in('country_code', countries);
+      if (companies.length > 0) {
+        const countryCodes = budgetCountryCodesForCompanies(companies);
+        if (countryCodes.length > 0) {
+          budgetQuery = budgetQuery.in('country_code', countryCodes);
+        }
       }
 
       if (products.length > 0) {
@@ -74,7 +78,7 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
 
       const isMonthFiltered = months.length > 0 && months.length < 12;
       const monthSet = new Set(months.map((m) => parseInt(m, 10)));
-      const salesFilters = { countries, products, months, catalog };
+      const salesFilters = { companies, products, months, catalog };
 
       let ventasRows: Awaited<ReturnType<typeof fetchVentasForComparison>> = [];
       try {

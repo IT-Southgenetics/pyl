@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { getDistinctVentasProducts } from '@/lib/ventas-data';
+import { getDistinctVentasProducts, getVentasCompanies } from '@/lib/ventas-data';
+import { filterComparisonCompanies } from '@/lib/comparison-companies';
 import { capitalizeFirstLetter, cn } from '@/lib/utils';
 import { ProductMultiSearchFilter } from '@/components/dashboard/ProductMultiSearchFilter';
 import { MonthRangeFilter } from "@/components/filters/MonthRangeFilter"
@@ -13,55 +14,44 @@ interface ComparisonFiltersProps {
   budgetNames: string[];
   monthFrom: number;
   monthTo: number;
-  selectedCountries: string[];
+  selectedCompanies: string[];
   /** Array vacío = todos. */
   selectedProducts: string[];
   onBudgetNameChange: (budgetName: string) => void;
   onMonthRangeChange: (range: { fromMonth: number; toMonth: number }) => void;
-  onCountriesChange: (countries: string[]) => void;
+  onCompaniesChange: (companies: string[]) => void;
   onProductsChange: (products: string[]) => void;
   allowedCountries?: string[];
-  showAllCountries?: boolean;
+  showAllCompanies?: boolean;
 }
-
-const COUNTRIES: MultiSelectOption[] = [
-  { value: 'CL', label: 'Chile' },
-  { value: 'UY', label: 'Uruguay' },
-  { value: 'AR', label: 'Argentina' },
-  { value: 'MX', label: 'México' },
-  { value: 'CO', label: 'Colombia' },
-  { value: 'VE', label: 'Venezuela' },
-  { value: 'DO', label: 'República Dominicana' },
-  { value: 'EC', label: 'Ecuador' },
-  { value: 'PY', label: 'Paraguay' },
-  { value: 'JM', label: 'Jamaica' },
-  { value: 'BO', label: 'Bolivia' },
-  { value: 'TT', label: 'Trinidad y Tobago' },
-  { value: 'BS', label: 'Bahamas' },
-  { value: 'BB', label: 'Barbados' },
-  { value: 'BM', label: 'Bermuda' },
-  { value: 'KY', label: 'Cayman Islands' },
-];
 
 export function ComparisonFilters({
   selectedBudgetName,
   budgetNames,
   monthFrom,
   monthTo,
-  selectedCountries,
+  selectedCompanies,
   selectedProducts,
   onBudgetNameChange,
   onMonthRangeChange,
-  onCountriesChange,
+  onCompaniesChange,
   onProductsChange,
   allowedCountries,
-  showAllCountries = true,
+  showAllCompanies = true,
 }: ComparisonFiltersProps) {
   const [products, setProducts] = useState<string[]>([]);
+  const [companyOptions, setCompanyOptions] = useState<MultiSelectOption[]>([]);
 
-  const filteredCountryList = allowedCountries?.length
-    ? COUNTRIES.filter((c) => allowedCountries.includes(c.value))
-    : COUNTRIES;
+  useEffect(() => {
+    getVentasCompanies()
+      .then((names) => {
+        const filtered = filterComparisonCompanies(names, allowedCountries ?? []);
+        setCompanyOptions(
+          filtered.map((name) => ({ value: name, label: name }))
+        );
+      })
+      .catch((error) => console.error('Error fetching companies:', error));
+  }, [allowedCountries]);
 
   useEffect(() => {
     fetchProducts();
@@ -69,7 +59,6 @@ export function ComparisonFilters({
 
   const fetchProducts = async () => {
     try {
-      // Obtener productos únicos de budget y ventas (2025 y 2026)
       const [budgetData, salesProducts] = await Promise.all([
         supabase
           .from('budget')
@@ -79,7 +68,7 @@ export function ComparisonFilters({
         getDistinctVentasProducts([2025, 2026]),
       ]);
 
-      const budgetProducts = budgetData.data?.map((b: any) => b.product_name) || [];
+      const budgetProducts = budgetData.data?.map((b: { product_name: string }) => b.product_name) || [];
       const uniqueProducts = [...new Set([...budgetProducts, ...salesProducts])].sort();
       setProducts(uniqueProducts);
     } catch (error) {
@@ -89,7 +78,6 @@ export function ComparisonFilters({
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {/* Budget */}
       <div className="flex flex-col gap-2">
         <label className="text-sm font-medium text-white/90">Budget</label>
         <select
@@ -112,13 +100,16 @@ export function ComparisonFilters({
 
       <MultiCheckboxDropdown
         label="Compañía"
-        options={filteredCountryList}
-        selectedValues={selectedCountries.length ? selectedCountries : filteredCountryList.map((c) => c.value)}
-        onSelectedValuesChange={onCountriesChange}
-        allLabel={showAllCountries ? "Todas las compañías" : "Todas (mis compañías)"}
+        options={companyOptions}
+        selectedValues={
+          selectedCompanies.length
+            ? selectedCompanies
+            : companyOptions.map((c) => c.value)
+        }
+        onSelectedValuesChange={onCompaniesChange}
+        allLabel={showAllCompanies ? "Todas las compañías" : "Todas (mis compañías)"}
       />
 
-      {/* Filtro de Producto */}
       <div className="flex flex-col gap-2">
         <ProductMultiSearchFilter
           products={products}
@@ -130,4 +121,3 @@ export function ComparisonFilters({
     </div>
   );
 }
-

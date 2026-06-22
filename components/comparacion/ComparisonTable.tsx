@@ -11,7 +11,13 @@ import {
   normalizeProductKey,
   saleGroupMatchesProductFilter,
   salesGroupKey,
+  type BudgetMatchRow,
 } from '@/lib/comparison-sales';
+import {
+  budgetCountryCodesForCompanies,
+  budgetCountryToCompany,
+  normalizeComparisonCompany,
+} from '@/lib/comparison-companies';
 import Link from 'next/link';
 import { ArrowUp, ArrowDown, Minus, ChevronDown } from 'lucide-react';
 import { cn, displayProductLabelFromName, formatNumber, formatUSDNumber } from '@/lib/utils';
@@ -22,8 +28,7 @@ interface BudgetMonthItem {
 }
 
 interface ComparisonRow {
-  country: string;
-  country_code: string;
+  company: string;
   product_name: string;
   product_id: string | null;
   budget2026: number;
@@ -42,7 +47,7 @@ interface ComparisonRow {
 interface ComparisonTableProps {
   budgetName: string;
   months: string[];
-  countries: string[];
+  companies: string[];
   /** Array vacío = todos. */
   products: string[];
 }
@@ -57,32 +62,14 @@ const MONTH_LABELS = [
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
 ];
 
-const COUNTRIES = [
-  { value: 'CL', label: 'Chile' },
-  { value: 'UY', label: 'Uruguay' },
-  { value: 'AR', label: 'Argentina' },
-  { value: 'MX', label: 'México' },
-  { value: 'CO', label: 'Colombia' },
-  { value: 'VE', label: 'Venezuela' },
-  { value: 'DO', label: 'República Dominicana' },
-  { value: 'EC', label: 'Ecuador' },
-  { value: 'PY', label: 'Paraguay' },
-  { value: 'JM', label: 'Jamaica' },
-  { value: 'BO', label: 'Bolivia' },
-  { value: 'TT', label: 'Trinidad y Tobago' },
-  { value: 'BS', label: 'Bahamas' },
-  { value: 'BB', label: 'Barbados' },
-  { value: 'BM', label: 'Bermuda' },
-  { value: 'KY', label: 'Cayman Islands' },
-];
-
 function budgetConsolidationKey(
-  countryCode: string,
+  company: string,
   productId: string | null,
   productName: string
 ): string {
-  if (productId) return `${countryCode}|pid:${productId}`;
-  return `${countryCode}|name:${normalizeProductKey(productName)}`;
+  const normalizedCompany = normalizeComparisonCompany(company);
+  if (productId) return `${normalizedCompany}|pid:${productId}`;
+  return `${normalizedCompany}|name:${normalizeProductKey(productName)}`;
 }
 
 const hasBudgetAndRealSales = (row: ComparisonRow): boolean =>
@@ -104,7 +91,7 @@ function sortComparisonRows(
   });
 }
 
-export function ComparisonTable({ budgetName, months, countries, products }: ComparisonTableProps) {
+export function ComparisonTable({ budgetName, months, companies, products }: ComparisonTableProps) {
   const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [aliasByName, setAliasByName] = useState<Record<string, string>>({});
@@ -132,7 +119,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
 
   useEffect(() => {
     fetchComparisonData();
-  }, [budgetName, months, countries, products]);
+  }, [budgetName, months, companies, products]);
 
   const fetchComparisonData = async () => {
     setLoading(true);
@@ -152,8 +139,11 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
         .eq('year', 2026)
         .eq('budget_name', budgetName);
 
-      if (countries.length > 0) {
-        budgetQuery = budgetQuery.in('country_code', countries);
+      if (companies.length > 0) {
+        const countryCodes = budgetCountryCodesForCompanies(companies);
+        if (countryCodes.length > 0) {
+          budgetQuery = budgetQuery.in('country_code', countryCodes);
+        }
       }
 
       if (products.length > 0) {
@@ -175,7 +165,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
 
       const isMonthFiltered = months.length > 0 && months.length < 12;
       const monthSet = new Set(months.map((m) => parseInt(m, 10)));
-      const salesFilters = { countries, products, months, catalog };
+      const salesFilters = { companies, products, months, catalog };
 
       let ventasRows: Awaited<ReturnType<typeof fetchVentasForComparison>> = [];
       try {
@@ -197,7 +187,12 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
           .from('product_country_overrides')
           .select('product_id,country_code,channel,overrides')
           .in('product_id', budgetProductIds);
-        if (countries.length > 0) ovQuery = ovQuery.in('country_code', countries);
+        if (companies.length > 0) {
+          const countryCodes = budgetCountryCodesForCompanies(companies);
+          if (countryCodes.length > 0) {
+            ovQuery = ovQuery.in('country_code', countryCodes);
+          }
+        }
         const { data: ovData } = await ovQuery;
         overrideRows = ovData || [];
       }
@@ -224,6 +219,13 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
       const consumedRealKeys = new Set<string>();
 
       const rawComparisonData: ComparisonRow[] = budgetData.map((budgetRow: any) => {
+        const comparisonCompany = budgetCountryToCompany(budgetRow.country_code);
+        const budgetMatch: BudgetMatchRow = {
+          comparisonCompany,
+          product_id: budgetRow.product_id ?? null,
+          product_name: budgetRow.product_name,
+        };
+
         const budget = isMonthFiltered
           ? MONTH_KEYS.reduce((sum, mk, idx) => {
               const monthNum = idx + 1;
@@ -233,9 +235,9 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
         const grossSalesUSD = getGrossSalesUSDForRow(budgetRow);
         const budgetAmountUSD = budget * grossSalesUSD;
 
-        const sales2025 = lookupSalesForBudget(budgetRow, groups2025);
-        const sales2026 = lookupSalesForBudget(budgetRow, groups2026);
-        for (const key of budgetLookupKeys(budgetRow)) {
+        const sales2025 = lookupSalesForBudget(budgetMatch, groups2025);
+        const sales2026 = lookupSalesForBudget(budgetMatch, groups2026);
+        for (const key of budgetLookupKeys(budgetMatch)) {
           if (groups2025.has(key)) consumedRealKeys.add(key);
           if (groups2026.has(key)) consumedRealKeys.add(key);
         }
@@ -260,8 +262,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
           : undefined;
 
         return {
-          country: budgetRow.country,
-          country_code: budgetRow.country_code,
+          company: comparisonCompany,
           product_name: budgetRow.product_name,
           product_id: budgetRow.product_id,
           budget2026: budget,
@@ -283,7 +284,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
       // filas (por ejemplo, por canal) para el mismo producto.
       const consolidatedMap = new Map<string, ComparisonRow>();
       for (const row of rawComparisonData) {
-        const key = budgetConsolidationKey(row.country_code, row.product_id, row.product_name);
+        const key = budgetConsolidationKey(row.company, row.product_id, row.product_name);
         const existing = consolidatedMap.get(key);
         if (!existing) {
           consolidatedMap.set(key, { ...row });
@@ -333,11 +334,15 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
 
       const budgetKeys = new Set(
         comparisonData.map((row) =>
-          budgetConsolidationKey(row.country_code, row.product_id, row.product_name)
+          budgetConsolidationKey(row.company, row.product_id, row.product_name)
         )
       );
 
       const allRealKeys = new Set([...groups2025.keys(), ...groups2026.keys()]);
+      const companyFilter =
+        companies.length > 0
+          ? new Set(companies.map(normalizeComparisonCompany))
+          : null;
 
       for (const key of allRealKeys) {
         if (consumedRealKeys.has(key)) continue;
@@ -347,11 +352,10 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
         const meta = sales2026 ?? sales2025;
         if (!meta) continue;
 
-        const countryCode = meta.countryCode;
-        const consolidationKey = salesGroupKey(countryCode, meta.productId, meta.productName);
+        const company = meta.company;
+        const consolidationKey = salesGroupKey(company, meta.productId, meta.productName);
         if (budgetKeys.has(consolidationKey)) continue;
-
-        if (countries.length > 0 && !countries.includes(countryCode)) continue;
+        if (companyFilter && !companyFilter.has(company)) continue;
         if (!saleGroupMatchesProductFilter(meta, products, catalog)) continue;
 
         const real2025 = sales2025?.cantidad ?? 0;
@@ -366,8 +370,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
           : (real2026 > 0 ? 100 : 0);
 
         comparisonData.push({
-          country: COUNTRIES.find((c) => c.value === countryCode)?.label || countryCode,
-          country_code: countryCode,
+          company,
           product_name: meta.productName,
           product_id: meta.productId,
           budget2026: 0,
@@ -420,7 +423,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
       <table className="w-full text-sm">
         <thead className="bg-white/10 border-b border-white/20">
           <tr>
-            <th className="text-left px-4 py-3 font-medium text-xs text-white">País</th>
+            <th className="text-left px-4 py-3 font-medium text-xs text-white">Compañía</th>
             <th className="text-left px-4 py-3 font-medium text-xs text-white">Producto</th>
             <th className="text-right px-4 py-3 font-medium text-xs text-white">Budget 2026</th>
             <th className="text-right px-4 py-3 font-medium text-xs text-white">Monto (US$)</th>
@@ -463,7 +466,7 @@ export function ComparisonTable({ budgetName, months, countries, products }: Com
 
             return (
               <tr key={idx} className="hover:bg-white/5 transition-colors">
-                <td className="px-4 py-3 text-sm text-white/90">{row.country}</td>
+                <td className="px-4 py-3 text-sm text-white/90">{row.company}</td>
                 <td className="px-4 py-3">
                   {row.product_id ? (
                     <Link

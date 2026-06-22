@@ -1,8 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { getCountryForCompany } from "@/lib/auth-constants"
+import {
+  GENERAL_LLC_COMPANY,
+  normalizeComparisonCompany,
+} from "@/lib/comparison-companies"
 
-/** Compañía LLC general: el país real viene en `ventas.pais`, no en el nombre de compañía. */
-export const GENERAL_LLC_COMPANY = "SouthGenetics LLC"
+export { GENERAL_LLC_COMPANY }
 
 export type VentaComparisonRow = {
   fecha: string
@@ -21,38 +23,11 @@ export type ProductCatalogRow = {
 }
 
 export type SalesGroup = {
-  countryCode: string
+  company: string
   productId: string | null
   productName: string
   cantidad: number
   monto: number
-}
-
-const COUNTRY_NAME_TO_CODE: Record<string, string> = {
-  Chile: "CL",
-  Uruguay: "UY",
-  Argentina: "AR",
-  México: "MX",
-  Mexico: "MX",
-  Colombia: "CO",
-  Venezuela: "VE",
-  Perú: "PE",
-  Peru: "PE",
-  Bolivia: "BO",
-  "Trinidad y Tobago": "TT",
-  "Trinidad and Tobago": "TT",
-  Bahamas: "BS",
-  Barbados: "BB",
-  Bermuda: "BM",
-  "Cayman Islands": "KY",
-  Ecuador: "EC",
-  Paraguay: "PY",
-  Jamaica: "JM",
-  "República Dominicana": "DO",
-  "Dominican Republic": "DO",
-  "El Salvador": "SV",
-  Guatemala: "GT",
-  Honduras: "HN",
 }
 
 /** Normaliza nombre de producto para comparación exacta (sin match parcial). */
@@ -66,85 +41,41 @@ export function normalizeProductKey(productName: string): string {
     .replace(/\s+/g, "")
 }
 
-function countryNameToCode(pais: string): string | null {
-  const trimmed = pais.trim()
-  if (!trimmed) return null
-  if (trimmed.length === 2 && trimmed === trimmed.toUpperCase()) return trimmed
-  const direct = COUNTRY_NAME_TO_CODE[trimmed]
-  if (direct) return direct
-  const upper = trimmed.toUpperCase()
-  for (const [name, code] of Object.entries(COUNTRY_NAME_TO_CODE)) {
-    if (upper.includes(name.toUpperCase())) return code
-  }
-  return null
-}
-
-/** País de una venta: LLC usa `pais`; compañías país-usan mapeo de compañía. */
-export function resolveVentaCountryCode(
-  company: string | null | undefined,
-  pais: string | null | undefined
-): string {
-  const trimmedCompany = (company ?? "").trim()
-  if (trimmedCompany === GENERAL_LLC_COMPANY) {
-    const fromPais = countryNameToCode((pais ?? "").trim())
-    return fromPais ?? "XX"
-  }
-  const fromCompany = getCountryForCompany(trimmedCompany)
-  if (fromCompany) return fromCompany
-  const upper = trimmedCompany.toUpperCase()
-  const fallback: Record<string, string> = {
-    CHILE: "CL",
-    URUGUAY: "UY",
-    ARGENTINA: "AR",
-    ARGE: "AR",
-    MÉXICO: "MX",
-    MEXICO: "MX",
-    COLOMBIA: "CO",
-    VENEZUELA: "VE",
-    DOMINICANA: "DO",
-    ECUADOR: "EC",
-    PARAGUAY: "PY",
-    JAMAICA: "JM",
-    BOLIVIA: "BO",
-    TRINIDAD: "TT",
-    BAHAMAS: "BS",
-    BARBADOS: "BB",
-    BERMUDA: "BM",
-    CAYMAN: "KY",
-    PERÚ: "PE",
-    PERU: "PE",
-  }
-  for (const [key, code] of Object.entries(fallback)) {
-    if (upper.includes(key)) return code
-  }
-  return "XX"
+/** Compañía de agrupación: LLC es una sola entidad (no se usa `pais`). */
+export function resolveVentaCompany(company: string | null | undefined): string {
+  return normalizeComparisonCompany((company ?? "").trim())
 }
 
 export function salesGroupKey(
-  countryCode: string,
+  company: string,
   productId: string | null | undefined,
   productName: string
 ): string {
-  if (productId) return `${countryCode}|pid:${productId}`
-  return `${countryCode}|name:${normalizeProductKey(productName)}`
+  const normalizedCompany = normalizeComparisonCompany(company)
+  if (productId) return `${normalizedCompany}|pid:${productId}`
+  return `${normalizedCompany}|name:${normalizeProductKey(productName)}`
+}
+
+export type BudgetMatchRow = {
+  comparisonCompany: string
+  product_id: string | null
+  product_name: string
 }
 
 /** Claves de grupo de ventas que corresponden a una fila de budget. */
-export function budgetLookupKeys(
-  budget: { country_code: string; product_id: string | null; product_name: string }
-): string[] {
-  const { country_code, product_id, product_name } = budget
+export function budgetLookupKeys(budget: BudgetMatchRow): string[] {
+  const { comparisonCompany, product_id, product_name } = budget
   if (product_id) {
-    return [salesGroupKey(country_code, product_id, product_name)]
+    return [salesGroupKey(comparisonCompany, product_id, product_name)]
   }
-  return [salesGroupKey(country_code, null, product_name)]
+  return [salesGroupKey(comparisonCompany, null, product_name)]
 }
 
 export function aggregateVentasByGroup(
   rows: VentaComparisonRow[],
   year: number,
   filters: {
-    countries: string[]
+    companies: string[]
     products: string[]
     months: string[]
     catalog: Map<string, ProductCatalogRow>
@@ -153,6 +84,10 @@ export function aggregateVentasByGroup(
   const isMonthFiltered = filters.months.length > 0 && filters.months.length < 12
   const monthSet = new Set(filters.months.map((m) => parseInt(m, 10)))
   const productFilter = filters.products.length > 0 ? new Set(filters.products) : null
+  const companyFilter =
+    filters.companies.length > 0
+      ? new Set(filters.companies.map(normalizeComparisonCompany))
+      : null
   const groups = new Map<string, SalesGroup>()
 
   for (const row of rows) {
@@ -162,8 +97,8 @@ export function aggregateVentasByGroup(
     const month = parseInt(String(row.fecha).slice(5, 7), 10)
     if (isMonthFiltered && !monthSet.has(month)) continue
 
-    const countryCode = resolveVentaCountryCode(row.company, row.pais)
-    if (filters.countries.length > 0 && !filters.countries.includes(countryCode)) continue
+    const company = resolveVentaCompany(row.company)
+    if (companyFilter && !companyFilter.has(company)) continue
 
     if (productFilter) {
       const names = new Set<string>([row.test])
@@ -178,7 +113,7 @@ export function aggregateVentasByGroup(
       if (!matches) continue
     }
 
-    const key = salesGroupKey(countryCode, row.id_producto, row.test)
+    const key = salesGroupKey(company, row.id_producto, row.test)
     const qty = Number(row.quantity) || 0
     const amount = Number(row.amount) || 0
     const existing = groups.get(key)
@@ -187,7 +122,7 @@ export function aggregateVentasByGroup(
       existing.monto += amount
     } else {
       groups.set(key, {
-        countryCode,
+        company,
         productId: row.id_producto,
         productName: row.test,
         cantidad: qty,
@@ -200,7 +135,7 @@ export function aggregateVentasByGroup(
 }
 
 export function lookupSalesForBudget(
-  budget: { country_code: string; product_id: string | null; product_name: string },
+  budget: BudgetMatchRow,
   groups: Map<string, SalesGroup>
 ): SalesGroup | null {
   for (const key of budgetLookupKeys(budget)) {
