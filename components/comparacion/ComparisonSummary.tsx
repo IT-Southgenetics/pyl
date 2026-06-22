@@ -2,9 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { fetchVentasAggregates, type VentasAggregateRow } from '@/lib/ventas-data';
+import {
+  aggregateVentasByGroup,
+  buildProductCatalog,
+  fetchVentasForComparison,
+} from '@/lib/comparison-sales';
 import { TrendingUp, TrendingDown, Equal } from 'lucide-react';
-import { getCountryForCompany } from '@/lib/auth-constants';
 import { formatNumber } from '@/lib/utils';
 
 interface ComparisonSummaryProps {
@@ -30,86 +33,6 @@ const MONTH_KEYS = [
   'jul', 'aug', 'sep', 'oct', 'nov', 'dec'
 ];
 
-// Extraer código de país de nombre de compañía usando el mismo mapeo que Real Import
-const extractCountryCodeFromCompany = (companyName: string): string => {
-  if (!companyName) return 'XX';
-
-  // 1) Intentar mapeo exacto usando la misma tabla que usa Real Import
-  const direct = getCountryForCompany(companyName);
-  if (direct) return direct;
-  
-  const upperName = companyName.toUpperCase();
-  
-  // Mapeo exhaustivo de todos los países
-  const countryMappings: Record<string, string> = {
-    'CHILE': 'CL',
-    'URUGUAY': 'UY',
-    'ARGENTINA': 'AR',
-    'ARGE': 'AR',
-    'MÉXICO': 'MX',
-    'MEXICO': 'MX',
-    'COLOMBIA': 'CO',
-    'VENEZUELA': 'VE',
-    'DOMINICANA': 'DO',
-    'REPÚBLICA DOMINICANA': 'DO',
-    'ECUADOR': 'EC',
-    'PARAGUAY': 'PY',
-    'JAMAICA': 'JM',
-    'BOLIVIA': 'BO',
-    'TRINIDAD': 'TT',
-    'TOBAGO': 'TT',
-    'BAHAMAS': 'BS',
-    'BARBADOS': 'BB',
-    'BERMUDA': 'BM',
-    'CAYMAN': 'KY',
-    'PERÚ': 'PE',
-    'PERU': 'PE',
-  };
-
-  // Buscar coincidencia
-  for (const [key, code] of Object.entries(countryMappings)) {
-    if (upperName.includes(key)) {
-      return code;
-    }
-  }
-
-  return 'XX';
-};
-
-// Normalizar nombre del producto para comparación (versión mejorada)
-const normalizeProductName = (productName: string): string => {
-  if (!productName) return '';
-  
-  return productName
-    .trim()
-    .toUpperCase()
-    .replace(/\[.*?\]/g, '') // Eliminar corchetes y su contenido
-    .replace(/[^\w]/g, '') // Eliminar todos los caracteres no alfanuméricos
-    .replace(/\s+/g, ''); // Eliminar todos los espacios
-};
-
-// Función para verificar si dos nombres de productos coinciden (match flexible)
-const productNamesMatch = (name1: string, name2: string): boolean => {
-  const norm1 = normalizeProductName(name1);
-  const norm2 = normalizeProductName(name2);
-  
-  // Match exacto después de normalización
-  if (norm1 === norm2) return true;
-  
-  // Match parcial: si uno contiene al otro (para casos como "Genomind" vs "Genomind Professional PGx")
-  if (norm1.length > 0 && norm2.length > 0) {
-    const shorter = norm1.length < norm2.length ? norm1 : norm2;
-    const longer = norm1.length >= norm2.length ? norm1 : norm2;
-    
-    // Solo hacer match parcial si el nombre corto tiene al menos 5 caracteres
-    if (shorter.length >= 5 && longer.includes(shorter)) {
-      return true;
-    }
-  }
-  
-  return false;
-};
-
 export function ComparisonSummary({ budgetName, months, countries, products }: ComparisonSummaryProps) {
   const [summary, setSummary] = useState<SummaryData>({
     budget2026: 0,
@@ -129,7 +52,6 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
   const fetchSummary = async () => {
     setLoading(true);
     try {
-      // 1. Fetch Budget 2026
       let budgetQuery = supabase
         .from('budget')
         .select('*')
@@ -147,97 +69,46 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
       const { data: budgetData, error: budgetError } = await budgetQuery;
       if (budgetError) throw budgetError;
 
-      let safeReal2025Data: VentasAggregateRow[] = [];
-      let safeReal2026Data: VentasAggregateRow[] = [];
-      try {
-        const [rows2025, rows2026] = await Promise.all([
-          fetchVentasAggregates({ years: [2025] }),
-          fetchVentasAggregates({ years: [2026] }),
-        ]);
-        safeReal2025Data = rows2025;
-        safeReal2026Data = rows2026;
-      } catch (salesError) {
-        console.error('❌ Error fetching real sales data:', salesError);
-      }
-
-      if (process.env.NODE_ENV === 'development') {
-        console.log('📊 Summary - Real Data 2025:', safeReal2025Data?.length, 'registros');
-        console.log('📊 Summary - Real Data 2026:', safeReal2026Data?.length, 'registros');
-      }
-
-      // 4. Calcular totales
-      let budget2026 = 0;
-      let real2025 = 0;
-      let real2026 = 0;
+      const { data: prods } = await supabase.from('products').select('id, name, alias');
+      const catalog = buildProductCatalog((prods || []) as { id: string; name: string; alias: string | null }[]);
 
       const isMonthFiltered = months.length > 0 && months.length < 12;
       const monthSet = new Set(months.map((m) => parseInt(m, 10)));
+      const salesFilters = { countries, products, months, catalog };
 
-      // Sumar Budget
-      budgetData?.forEach((row: any) => {
+      let ventasRows: Awaited<ReturnType<typeof fetchVentasForComparison>> = [];
+      try {
+        ventasRows = await fetchVentasForComparison(supabase, [2025, 2026]);
+      } catch (salesError) {
+        console.error('Error fetching real sales data:', salesError);
+      }
+
+      const groups2025 = aggregateVentasByGroup(ventasRows, 2025, salesFilters);
+      const groups2026 = aggregateVentasByGroup(ventasRows, 2026, salesFilters);
+
+      let budget2026 = 0;
+      budgetData?.forEach((row: Record<string, unknown>) => {
         if (isMonthFiltered) {
           budget2026 += MONTH_KEYS.reduce((sum, mk, idx) => {
             const monthNum = idx + 1;
-            return monthSet.has(monthNum) ? sum + (row[mk] || 0) : sum;
+            return monthSet.has(monthNum) ? sum + (Number(row[mk]) || 0) : sum;
           }, 0);
         } else {
-          budget2026 += row.total_units || 0;
+          budget2026 += Number(row.total_units) || 0;
         }
       });
 
-      // Agrupar Real 2025 por producto y país (misma lógica que ComparisonTable)
-      const real2025Grouped: Record<string, number> = {};
-      safeReal2025Data?.forEach((row: any) => {
-        const countryCodeFromCompany = extractCountryCodeFromCompany(row.compañia);
-        const normalizedProduct = normalizeProductName(row.producto);
-        const key = `${countryCodeFromCompany}-${normalizedProduct}`;
+      const real2025 = [...groups2025.values()].reduce((sum, g) => sum + g.cantidad, 0);
+      const real2026 = [...groups2026.values()].reduce((sum, g) => sum + g.cantidad, 0);
 
-        const matchesCountry = countries.length === 0 || countries.includes(countryCodeFromCompany);
-        const matchesProduct =
-          products.length === 0 ||
-          products.some((p) => productNamesMatch(p, row.producto));
-        const matchesMonth = !isMonthFiltered || monthSet.has(Number(row.mes));
-
-        if (matchesCountry && matchesProduct && matchesMonth) {
-          const cantidad = parseInt(row.cantidad_ventas) || 0;
-          real2025Grouped[key] = (real2025Grouped[key] || 0) + cantidad;
-        }
-      });
-
-      // Agrupar Real 2026 por producto y país (misma lógica que ComparisonTable)
-      const real2026Grouped: Record<string, number> = {};
-      safeReal2026Data?.forEach((row: any) => {
-        const countryCodeFromCompany = extractCountryCodeFromCompany(row.compañia);
-        const normalizedProduct = normalizeProductName(row.producto);
-        const key = `${countryCodeFromCompany}-${normalizedProduct}`;
-
-        const matchesCountry = countries.length === 0 || countries.includes(countryCodeFromCompany);
-        const matchesProduct =
-          products.length === 0 ||
-          products.some((p) => productNamesMatch(p, row.producto));
-        const matchesMonth = !isMonthFiltered || monthSet.has(Number(row.mes));
-
-        if (matchesCountry && matchesProduct && matchesMonth) {
-          const cantidad = parseInt(row.cantidad_ventas) || 0;
-          real2026Grouped[key] = (real2026Grouped[key] || 0) + cantidad;
-        }
-      });
-
-      // Sumar los valores agrupados
-      real2025 = Object.values(real2025Grouped).reduce((sum, val) => sum + val, 0);
-      real2026 = Object.values(real2026Grouped).reduce((sum, val) => sum + val, 0);
-
-      if (process.env.NODE_ENV === 'development') {
-        console.log('📊 Summary Totals:', { budget2026, real2026, real2025 });
-      }
-
-      // Delta: Real 2026 vs Budget (invertido)
       const deltaBudgetVsReal2026 = real2026 - budget2026;
-      const deltaBudgetVsReal2026Pct = budget2026 > 0 
-        ? (deltaBudgetVsReal2026 / budget2026) * 100 
-        : (real2026 > 0 ? 100 : (budget2026 === 0 && real2026 === 0 ? 0 : 0));
+      const deltaBudgetVsReal2026Pct = budget2026 > 0
+        ? (deltaBudgetVsReal2026 / budget2026) * 100
+        : (real2026 > 0 ? 100 : 0);
       const deltaReal2026VsReal2025 = real2026 - real2025;
-      const deltaReal2026VsReal2025Pct = real2025 > 0 ? (deltaReal2026VsReal2025 / real2025) * 100 : (real2026 > 0 ? 100 : 0);
+      const deltaReal2026VsReal2025Pct = real2025 > 0
+        ? (deltaReal2026VsReal2025 / real2025) * 100
+        : (real2026 > 0 ? 100 : 0);
 
       setSummary({
         budget2026,
@@ -270,7 +141,6 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
-      {/* Budget 2026 */}
       <div className="bg-white/10 backdrop-blur-sm p-4 rounded-lg border border-white/20 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
@@ -283,7 +153,6 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
         </div>
       </div>
 
-      {/* Real 2026 */}
       <div className="bg-white/10 backdrop-blur-sm p-4 rounded-lg border border-white/20 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
@@ -296,7 +165,6 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
         </div>
       </div>
 
-      {/* Real 2025 */}
       <div className="bg-white/10 backdrop-blur-sm p-4 rounded-lg border border-white/20 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
@@ -309,14 +177,13 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
         </div>
       </div>
 
-      {/* Δ Real 2026 vs Budget - cantidad */}
       <div className="bg-white/10 backdrop-blur-sm p-4 rounded-lg border border-white/20 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-white/70">Δ Real 2026 vs Budget</p>
             <p className={`text-2xl font-bold mt-1 ${
-              isDeltaBudgetUp ? 'text-emerald-300' : 
-              isDeltaBudgetDown ? 'text-red-300' : 
+              isDeltaBudgetUp ? 'text-emerald-300' :
+              isDeltaBudgetDown ? 'text-red-300' :
               'text-white/60'
             }`}>
               {summary.deltaBudgetVsReal2026 >= 0 ? '+' : ''}{formatNumber(summary.deltaBudgetVsReal2026, 'es-UY')}
@@ -329,14 +196,13 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
         </div>
       </div>
 
-      {/* Δ Real 2026 vs Budget - % */}
       <div className="bg-white/10 backdrop-blur-sm p-4 rounded-lg border border-white/20 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-white/70">Δ Real 2026 vs Budget</p>
             <p className={`text-2xl font-bold mt-1 ${
-              isDeltaBudgetUp ? 'text-emerald-300' : 
-              isDeltaBudgetDown ? 'text-red-300' : 
+              isDeltaBudgetUp ? 'text-emerald-300' :
+              isDeltaBudgetDown ? 'text-red-300' :
               'text-white/60'
             }`}>
               {summary.deltaBudgetVsReal2026Pct >= 0 ? '+' : ''}{summary.deltaBudgetVsReal2026Pct.toFixed(1)}%
@@ -345,14 +211,13 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
         </div>
       </div>
 
-      {/* Δ Real 2026 vs Real 2025 - cantidad */}
       <div className="bg-white/10 backdrop-blur-sm p-4 rounded-lg border border-white/20 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-white/70">Δ Real 2026 vs Real 2025</p>
             <p className={`text-2xl font-bold mt-1 ${
-              isDeltaR26Up ? 'text-emerald-300' : 
-              isDeltaR26Down ? 'text-red-300' : 
+              isDeltaR26Up ? 'text-emerald-300' :
+              isDeltaR26Down ? 'text-red-300' :
               'text-white/60'
             }`}>
               {summary.deltaReal2026VsReal2025 >= 0 ? '+' : ''}{formatNumber(summary.deltaReal2026VsReal2025, 'es-UY')}
@@ -365,14 +230,13 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
         </div>
       </div>
 
-      {/* Δ Real 2026 vs Real 2025 - % */}
       <div className="bg-white/10 backdrop-blur-sm p-4 rounded-lg border border-white/20 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-white/70">Δ Real 2026 vs Real 2025</p>
             <p className={`text-2xl font-bold mt-1 ${
-              isDeltaR26Up ? 'text-emerald-300' : 
-              isDeltaR26Down ? 'text-red-300' : 
+              isDeltaR26Up ? 'text-emerald-300' :
+              isDeltaR26Down ? 'text-red-300' :
               'text-white/60'
             }`}>
               {summary.deltaReal2026VsReal2025Pct >= 0 ? '+' : ''}{summary.deltaReal2026VsReal2025Pct.toFixed(1)}%
@@ -383,4 +247,3 @@ export function ComparisonSummary({ budgetName, months, countries, products }: C
     </div>
   );
 }
-
