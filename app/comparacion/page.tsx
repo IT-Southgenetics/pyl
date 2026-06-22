@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Download, AlertCircle } from 'lucide-react';
 import { ComparisonFilters } from '@/components/comparacion/ComparisonFilters';
@@ -12,6 +12,13 @@ import { filterCompaniesByCountries } from '@/lib/auth-constants';
 import { budgetCountryCodesForCompanies } from '@/lib/comparison-companies';
 import { getVentasCompanies } from '@/lib/ventas-data';
 import { monthsFromRange } from "@/components/filters/MonthRangeFilter"
+import { fetchPlProductCatalog } from '@/lib/pl-product-catalog';
+import {
+  buildCategoryByNameMap,
+  filterProductNamesByBusinessGroup,
+  resolveEffectiveProductNames,
+  type ProductBusinessGroup,
+} from '@/lib/product-categories';
 
 export default function ComparacionPage() {
   const { allowedCountries, isAdmin, loading: permLoading } = usePermissions();
@@ -22,6 +29,36 @@ export default function ComparacionPage() {
   const selectedMonths = monthsFromRange({ fromMonth: monthFrom, toMonth: monthTo });
   const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [businessGroup, setBusinessGroup] = useState<ProductBusinessGroup>('all');
+  const [categoryByName, setCategoryByName] = useState<Record<string, string>>({});
+  const [allProducts, setAllProducts] = useState<string[]>([]);
+
+  const effectiveProducts = useMemo(
+    () => resolveEffectiveProductNames(allProducts, selectedProducts, categoryByName, businessGroup),
+    [allProducts, selectedProducts, categoryByName, businessGroup]
+  );
+
+  const productsInGroup = useMemo(
+    () => filterProductNamesByBusinessGroup(allProducts, categoryByName, businessGroup),
+    [allProducts, categoryByName, businessGroup]
+  );
+
+  useEffect(() => {
+    fetchPlProductCatalog()
+      .then((rows) => {
+        const map = buildCategoryByNameMap(rows);
+        for (const row of rows) {
+          const alias = row.alias?.trim();
+          if (alias) map[alias] = row.category;
+        }
+        setCategoryByName(map);
+      })
+      .catch((e) => console.error('Error loading product catalog:', e));
+  }, []);
+
+  useEffect(() => {
+    setSelectedProducts((prev) => prev.filter((p) => productsInGroup.includes(p)));
+  }, [businessGroup, productsInGroup]);
 
   useEffect(() => {
     if (permLoading || isAdmin) return;
@@ -116,6 +153,10 @@ export default function ComparacionPage() {
         }}
         onCompaniesChange={setSelectedCompanies}
         onProductsChange={setSelectedProducts}
+        businessGroup={businessGroup}
+        onBusinessGroupChange={setBusinessGroup}
+        productsInGroup={productsInGroup}
+        onAllProductsLoaded={setAllProducts}
         allowedCountries={allowedCountries}
         showAllCompanies={isAdmin}
       />
@@ -124,14 +165,18 @@ export default function ComparacionPage() {
         budgetName={selectedBudgetName}
         months={selectedMonths}
         companies={selectedCompanies}
-        products={selectedProducts}
+        products={effectiveProducts}
+        businessGroup={businessGroup}
+        categoryByName={categoryByName}
       />
 
       <ComparisonTable
         budgetName={selectedBudgetName}
         months={selectedMonths}
         companies={selectedCompanies}
-        products={selectedProducts}
+        products={effectiveProducts}
+        businessGroup={businessGroup}
+        categoryByName={categoryByName}
       />
       </div>
     </div>

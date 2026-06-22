@@ -8,6 +8,7 @@ import {
   fetchVentasForComparison,
 } from '@/lib/comparison-sales';
 import { budgetCountryCodesForCompanies } from '@/lib/comparison-companies';
+import type { ProductBusinessGroup } from '@/lib/product-categories';
 import { TrendingUp, TrendingDown, Equal } from 'lucide-react';
 import { formatNumber } from '@/lib/utils';
 
@@ -15,8 +16,9 @@ interface ComparisonSummaryProps {
   budgetName: string;
   months: string[];
   companies: string[];
-  /** Array vacío = todos. */
-  products: string[];
+  products?: string[];
+  businessGroup: ProductBusinessGroup;
+  categoryByName: Record<string, string | null | undefined>;
 }
 
 interface SummaryData {
@@ -34,7 +36,14 @@ const MONTH_KEYS = [
   'jul', 'aug', 'sep', 'oct', 'nov', 'dec'
 ];
 
-export function ComparisonSummary({ budgetName, months, companies, products }: ComparisonSummaryProps) {
+export function ComparisonSummary({
+  budgetName,
+  months,
+  companies,
+  products,
+  businessGroup,
+  categoryByName,
+}: ComparisonSummaryProps) {
   const [summary, setSummary] = useState<SummaryData>({
     budget2026: 0,
     real2026: 0,
@@ -48,11 +57,24 @@ export function ComparisonSummary({ budgetName, months, companies, products }: C
 
   useEffect(() => {
     fetchSummary();
-  }, [budgetName, months, companies, products]);
+  }, [budgetName, months, companies, products, businessGroup, categoryByName]);
 
   const fetchSummary = async () => {
     setLoading(true);
     try {
+      if (products !== undefined && products.length === 0) {
+        setSummary({
+          budget2026: 0,
+          real2026: 0,
+          real2025: 0,
+          deltaBudgetVsReal2026: 0,
+          deltaBudgetVsReal2026Pct: 0,
+          deltaReal2026VsReal2025: 0,
+          deltaReal2026VsReal2025Pct: 0,
+        });
+        return;
+      }
+
       let budgetQuery = supabase
         .from('budget')
         .select('*')
@@ -66,7 +88,7 @@ export function ComparisonSummary({ budgetName, months, companies, products }: C
         }
       }
 
-      if (products.length > 0) {
+      if (products !== undefined && products.length > 0) {
         budgetQuery = budgetQuery.in('product_name', products);
       }
 
@@ -78,7 +100,14 @@ export function ComparisonSummary({ budgetName, months, companies, products }: C
 
       const isMonthFiltered = months.length > 0 && months.length < 12;
       const monthSet = new Set(months.map((m) => parseInt(m, 10)));
-      const salesFilters = { companies, products, months, catalog };
+      const salesFilters = {
+        companies,
+        products,
+        businessGroup,
+        categoryByName,
+        months,
+        catalog,
+      };
 
       let ventasRows: Awaited<ReturnType<typeof fetchVentasForComparison>> = [];
       try {

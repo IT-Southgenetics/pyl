@@ -18,6 +18,7 @@ import {
   budgetCountryToCompany,
   normalizeComparisonCompany,
 } from '@/lib/comparison-companies';
+import type { ProductBusinessGroup } from '@/lib/product-categories';
 import Link from 'next/link';
 import { ArrowUp, ArrowDown, Minus, ChevronDown } from 'lucide-react';
 import { cn, displayProductLabelFromName, formatNumber, formatUSDNumber } from '@/lib/utils';
@@ -48,8 +49,10 @@ interface ComparisonTableProps {
   budgetName: string;
   months: string[];
   companies: string[];
-  /** Array vacío = todos. */
-  products: string[];
+  /** undefined = todos (respetando businessGroup). [] = ninguno. */
+  products?: string[];
+  businessGroup: ProductBusinessGroup;
+  categoryByName: Record<string, string | null | undefined>;
 }
 
 const MONTH_KEYS = [
@@ -91,7 +94,14 @@ function sortComparisonRows(
   });
 }
 
-export function ComparisonTable({ budgetName, months, companies, products }: ComparisonTableProps) {
+export function ComparisonTable({
+  budgetName,
+  months,
+  companies,
+  products,
+  businessGroup,
+  categoryByName,
+}: ComparisonTableProps) {
   const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [aliasByName, setAliasByName] = useState<Record<string, string>>({});
@@ -119,7 +129,7 @@ export function ComparisonTable({ budgetName, months, companies, products }: Com
 
   useEffect(() => {
     fetchComparisonData();
-  }, [budgetName, months, companies, products]);
+  }, [budgetName, months, companies, products, businessGroup, categoryByName]);
 
   const fetchComparisonData = async () => {
     setLoading(true);
@@ -131,6 +141,12 @@ export function ComparisonTable({ budgetName, months, companies, products }: Com
       }
       setAliasByName(aliasMap);
       const catalog = buildProductCatalog((prods || []) as { id: string; name: string; alias: string | null }[]);
+
+      if (products !== undefined && products.length === 0) {
+        setRows([]);
+        setLoading(false);
+        return;
+      }
 
       // 1. Fetch Budget 2026
       let budgetQuery = supabase
@@ -146,7 +162,7 @@ export function ComparisonTable({ budgetName, months, companies, products }: Com
         }
       }
 
-      if (products.length > 0) {
+      if (products !== undefined && products.length > 0) {
         budgetQuery = budgetQuery.in('product_name', products);
       }
 
@@ -165,7 +181,14 @@ export function ComparisonTable({ budgetName, months, companies, products }: Com
 
       const isMonthFiltered = months.length > 0 && months.length < 12;
       const monthSet = new Set(months.map((m) => parseInt(m, 10)));
-      const salesFilters = { companies, products, months, catalog };
+      const salesFilters = {
+        companies,
+        products,
+        businessGroup,
+        categoryByName,
+        months,
+        catalog,
+      };
 
       let ventasRows: Awaited<ReturnType<typeof fetchVentasForComparison>> = [];
       try {
@@ -356,7 +379,7 @@ export function ComparisonTable({ budgetName, months, companies, products }: Com
         const consolidationKey = salesGroupKey(company, meta.productId, meta.productName);
         if (budgetKeys.has(consolidationKey)) continue;
         if (companyFilter && !companyFilter.has(company)) continue;
-        if (!saleGroupMatchesProductFilter(meta, products, catalog)) continue;
+        if (!saleGroupMatchesProductFilter(meta, products, businessGroup, categoryByName, catalog)) continue;
 
         const real2025 = sales2025?.cantidad ?? 0;
         const real2026 = sales2026?.cantidad ?? 0;

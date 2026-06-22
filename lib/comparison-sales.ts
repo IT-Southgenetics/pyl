@@ -3,6 +3,8 @@ import {
   GENERAL_LLC_COMPANY,
   normalizeComparisonCompany,
 } from "@/lib/comparison-companies"
+import type { ProductBusinessGroup } from "@/lib/product-categories"
+import { productMatchesBusinessGroup } from "@/lib/product-categories"
 
 export { GENERAL_LLC_COMPANY }
 
@@ -76,19 +78,24 @@ export function aggregateVentasByGroup(
   year: number,
   filters: {
     companies: string[]
-    products: string[]
+    products?: string[]
+    businessGroup: ProductBusinessGroup
+    categoryByName: Record<string, string | null | undefined>
     months: string[]
     catalog: Map<string, ProductCatalogRow>
   }
 ): Map<string, SalesGroup> {
   const isMonthFiltered = filters.months.length > 0 && filters.months.length < 12
   const monthSet = new Set(filters.months.map((m) => parseInt(m, 10)))
-  const productFilter = filters.products.length > 0 ? new Set(filters.products) : null
   const companyFilter =
     filters.companies.length > 0
       ? new Set(filters.companies.map(normalizeComparisonCompany))
       : null
   const groups = new Map<string, SalesGroup>()
+
+  if (filters.products !== undefined && filters.products.length === 0) {
+    return groups
+  }
 
   for (const row of rows) {
     const rowYear = parseInt(String(row.fecha).slice(0, 4), 10)
@@ -100,17 +107,16 @@ export function aggregateVentasByGroup(
     const company = resolveVentaCompany(row.company)
     if (companyFilter && !companyFilter.has(company)) continue
 
-    if (productFilter) {
-      const names = new Set<string>([row.test])
-      if (row.id_producto) {
-        const prod = filters.catalog.get(row.id_producto)
-        if (prod) {
-          names.add(prod.name)
-          if (prod.alias) names.add(prod.alias)
-        }
-      }
-      const matches = [...names].some((n) => productFilter.has(n))
-      if (!matches) continue
+    if (
+      !rowMatchesProductFilters(
+        row,
+        filters.catalog,
+        filters.categoryByName,
+        filters.businessGroup,
+        filters.products
+      )
+    ) {
+      continue
     }
 
     const key = salesGroupKey(company, row.id_producto, row.test)
@@ -147,17 +153,25 @@ export function lookupSalesForBudget(
 
 export function saleGroupMatchesProductFilter(
   group: SalesGroup,
-  products: string[],
+  products: string[] | undefined,
+  businessGroup: ProductBusinessGroup,
+  categoryByName: Record<string, string | null | undefined>,
   catalog: Map<string, ProductCatalogRow>
 ): boolean {
-  if (products.length === 0) return true
+  const catalogProd = group.productId ? catalog.get(group.productId) : undefined
+  const category = catalogProd
+    ? categoryByName[catalogProd.name]
+    : categoryByName[group.productName]
+
+  if (!productMatchesBusinessGroup(category, businessGroup)) return false
+
+  if (products === undefined) return true
+  if (products.length === 0) return false
+
   const names = new Set<string>([group.productName])
-  if (group.productId) {
-    const prod = catalog.get(group.productId)
-    if (prod) {
-      names.add(prod.name)
-      if (prod.alias) names.add(prod.alias)
-    }
+  if (catalogProd) {
+    names.add(catalogProd.name)
+    if (catalogProd.alias) names.add(catalogProd.alias)
   }
   return products.some((p) => names.has(p))
 }
@@ -206,4 +220,28 @@ export function buildProductCatalog(
     })
   }
   return map
+}
+
+function rowMatchesProductFilters(
+  row: VentaComparisonRow,
+  catalog: Map<string, ProductCatalogRow>,
+  categoryByName: Record<string, string | null | undefined>,
+  businessGroup: ProductBusinessGroup,
+  productNames?: string[]
+): boolean {
+  const catalogProd = row.id_producto ? catalog.get(row.id_producto) : undefined
+  const category = catalogProd
+    ? categoryByName[catalogProd.name]
+    : categoryByName[row.test]
+
+  if (!productMatchesBusinessGroup(category, businessGroup)) return false
+
+  if (productNames === undefined) return true
+
+  const names = new Set<string>([row.test])
+  if (catalogProd) {
+    names.add(catalogProd.name)
+    if (catalogProd.alias) names.add(catalogProd.alias)
+  }
+  return productNames.some((n) => names.has(n))
 }
